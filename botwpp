@@ -1,3 +1,16 @@
+console.log("🔥 Bot está iniciando...");
+
+const client = new Client({
+  puppeteer: {
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
+    ]
+  },
+  restartOnAuthFail: true,
+  takeoverOnConflict: true
+});
 console.log("🟢 Bot iniciando..."); // Mensagem de teste
 console.log("Versão do Node:", process.version); // Verifica se o Node.js está correto
 const qrcode = require('qrcode-terminal');
@@ -235,6 +248,8 @@ client.on('message', async msg => {
 });
 
 // 6. INICIALIZAÇÃO
+client.on('loading_screen', (percent, message) => {
+  console.log(`🔄 Carregando: ${percent}% - ${message}`);
 client.initialize();
 
 // 7. TRATAMENTO DE ERROS
