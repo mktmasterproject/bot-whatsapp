@@ -1,3 +1,5 @@
+console.log("🟢 Bot iniciando..."); // Mensagem de teste
+console.log("Versão do Node:", process.version); // Verifica se o Node.js está correto
 const qrcode = require('qrcode-terminal');
 const { Client } = require('whatsapp-web.js');
 const ExcelJS = require('exceljs');
