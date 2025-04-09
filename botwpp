@@ -1,0 +1,241 @@
+const qrcode = require('qrcode-terminal');
+const { Client } = require('whatsapp-web.js');
+const ExcelJS = require('exceljs');
+const fs = require('fs').promises;
+const path = require('path');
+
+// 1. CONFIGURAÇÃO INICIAL
+const client = new Client();
+const dataDir = path.join(__dirname, 'data');
+const filePath = path.join(dataDir, 'leads.xlsx');
+const backupPath = path.join(dataDir, 'leads_backup.json');
+
+// 2. INICIALIZAÇÃO DA PASTA
+async function init() {
+    try {
+        await fs.mkdir(dataDir, { recursive: true });
+        console.log(`📂 Pasta data criada em: ${dataDir}`);
+        
+        try {
+            await fs.access(dataDir, fs.constants.W_OK);
+        } catch {
+            throw new Error('Sem permissão de escrita na pasta');
+        }
+    } catch (err) {
+        console.error('❌ Erro na inicialização:', err);
+        throw err;
+    }
+}
+
+// 3. FUNÇÃO DE SALVAMENTO CORRIGIDA
+async function salvarLead(nome, telefone, email, fonte, interesse) {
+    const leadData = {
+        nome,
+        telefone: telefone.replace('@c.us', ''),
+        email,
+        fonte,
+        interesse,
+        data: new Date().toLocaleString('pt-BR')
+    };
+
+    const workbook = new ExcelJS.Workbook();
+    let worksheet;
+
+    try {
+        // Verifica se o arquivo existe
+        try {
+            await workbook.xlsx.readFile(filePath);
+            worksheet = workbook.getWorksheet('Leads') || workbook.addWorksheet('Leads');
+            console.log('✔ Planilha existente carregada');
+        } catch (error) {
+            console.log('🆕 Criando nova planilha...');
+            worksheet = workbook.addWorksheet('Leads');
+            worksheet.columns = [
+                { header: 'Nome', key: 'nome', width: 20 },
+                { header: 'Telefone', key: 'telefone', width: 15 },
+                { header: 'E-mail', key: 'email', width: 25 },
+                { header: 'Como Chegou', key: 'fonte', width: 20 },
+                { header: 'Interesse', key: 'interesse', width: 30 },
+                { header: 'Data/Hora', key: 'data', width: 25 }
+            ];
+        }
+
+        // Adiciona os dados
+        worksheet.addRow(leadData);
+
+        // SALVAMENTO CORRIGIDO (usando writeFile diretamente)
+        await workbook.xlsx.writeFile(filePath);
+        console.log('✅ Lead salvo com sucesso no Excel!');
+        return true;
+
+    } catch (err) {
+        console.error('❌ Erro ao salvar no Excel:', err);
+        
+        // Tenta fazer backup
+        try {
+            await salvarBackup(leadData);
+            console.log('📦 Backup JSON criado como fallback');
+            return false;
+        } catch (backupErr) {
+            console.error('❌ Falha no backup:', backupErr);
+            return false;
+        }
+    }
+}
+
+// 4. BACKUP EM JSON (mantido igual)
+async function salvarBackup(data) {
+    try {
+        let backups = [];
+        try {
+            const content = await fs.readFile(backupPath, 'utf8');
+            backups = JSON.parse(content);
+        } catch {}
+
+        backups.push(data);
+        await fs.writeFile(backupPath, JSON.stringify(backups, null, 2));
+        return true;
+    } catch (err) {
+        throw err;
+    }
+}
+
+// 5. FLUXO DE MENSAGENS (mantido igual)
+const conversas = {};
+
+client.on('qr', qr => {
+    qrcode.generate(qr, { small: true });
+});
+
+client.on('ready', async () => {
+    console.log('🚀 Bot conectado!');
+    try {
+        await init();
+        console.log(`📊 Dados serão salvos em: ${filePath}`);
+        
+        const testeSalvo = await salvarLead(
+            'Teste', '5511999999999', 
+            'teste@teste.com', 'Teste', 'Teste'
+        );
+        
+        if (!testeSalvo) {
+            console.error('⚠️ AVISO: Problema no salvamento inicial');
+        }
+    } catch (err) {
+        console.error('❌ Falha na inicialização:', err);
+    }
+});
+
+client.on('message', async msg => {
+    if (msg.from.endsWith('@c.us')) {
+        try {
+            const telefone = msg.from;
+            const chat = await msg.getChat();
+
+            if (msg.body.toLowerCase().trim() === 'atendente') {
+                await client.sendMessage(telefone, 'Um atendente será contactado em breve!');
+                return;
+            }
+
+            if (!conversas[telefone] || /in[íi]cio|menu|oi|olá/i.test(msg.body)) {
+                conversas[telefone] = { etapa: 1 };
+                await client.sendMessage(telefone, 
+                    'Olá, tudo bem? 😄 Sou o assistente virtual da Master Project. Qual seu nome, por favor?'
+                );
+                return;
+            }
+
+            if (conversas[telefone].etapa === 1) {
+                conversas[telefone] = { ...conversas[telefone], nome: msg.body, etapa: 2 };
+                await client.sendMessage(telefone, 
+                    `Obrigado, ${msg.body.split(' ')[0]}! Qual seu e-mail para contato?`
+                );
+                return;
+            }
+
+            if (conversas[telefone].etapa === 2) {
+                if (!msg.body.includes('@') || !msg.body.includes('.')) {
+                    await client.sendMessage(telefone, 'Por favor, digite um e-mail válido (exemplo: nome@provedor.com)');
+                    return;
+                }
+                conversas[telefone] = { ...conversas[telefone], email: msg.body, etapa: 3 };
+                await client.sendMessage(telefone, 
+                    'Como você chegou até nós? (Exemplo: Facebook, Instagram, indicação, etc.)'
+                );
+                return;
+            }
+
+            if (conversas[telefone].etapa === 3) {
+                conversas[telefone] = { ...conversas[telefone], fonte: msg.body, etapa: 4 };
+                await client.sendMessage(telefone, 
+                    'Nosso horário de atendimento é de segunda a sexta-feira, das 09h às 18h. ' +
+                    'Caso tenha nos contatado fora do horário, responderemos no próximo dia útil. 😊'
+                );
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                await client.sendMessage(telefone,
+                    `Gostaria de saber qual treinamento você tem mais interesse, ` +
+                    `${conversas[telefone].nome.split(' ')[0]}. Por favor, escolha uma opção:\n\n` +
+                    '1️⃣ Gestão de Projetos Híbrida\n' +
+                    '2️⃣ Excel Avançado\n' +
+                    '3️⃣ Power BI\n' +
+                    '4️⃣ Trilha Master (todos os 3 cursos)'
+                );
+                return;
+            }
+
+            if (conversas[telefone].etapa === 4) {
+                let curso, link;
+                if (/1|gestão|projeto|híbrida/i.test(msg.body)) {
+                    curso = 'Gestão de Projetos Híbrida';
+                    link = 'https://www.masterproject.com.br/gestao';
+                } else if (/2|excel/i.test(msg.body)) {
+                    curso = 'Excel Avançado';
+                    link = 'https://www.masterproject.com.br/excel';
+                } else if (/3|power\s*bi/i.test(msg.body)) {
+                    curso = 'Power BI';
+                    link = 'https://www.masterproject.com.br/powerbi';
+                } else if (/4|todos|trilha/i.test(msg.body)) {
+                    curso = 'Trilha Master';
+                    link = 'https://www.masterproject.com.br/trilha';
+                } else {
+                    await client.sendMessage(telefone, 
+                        'Opção inválida. Por favor, digite:\n\n' +
+                        '1️⃣ Gestão de Projetos\n' +
+                        '2️⃣ Excel\n' +
+                        '3️⃣ Power BI\n' +
+                        '4️⃣ Trilha Completa\n\n' +
+                        'Ou "atendente" para ajuda humana'
+                    );
+                    return;
+                }
+
+                const salvou = await salvarLead(
+                    conversas[telefone].nome,
+                    telefone,
+                    conversas[telefone].email,
+                    conversas[telefone].fonte,
+                    curso
+                );
+
+                if (salvou) {
+                    await client.sendMessage(telefone, `Aqui está o link: ${link}`);
+                }
+                await client.sendMessage(telefone,
+                    'Agradecemos pelo seu interesse! 😊\n\n' +
+                    'Digite "início" para recomeçar ou "atendente" para ajuda.'
+                );
+            }
+
+        } catch (err) {
+            console.error('❌ Erro no processamento:', err);
+        }
+    }
+});
+
+// 6. INICIALIZAÇÃO
+client.initialize();
+
+// 7. TRATAMENTO DE ERROS
+process.on('unhandledRejection', err => {
+    console.error('❌ Erro não tratado:', err);
+});
